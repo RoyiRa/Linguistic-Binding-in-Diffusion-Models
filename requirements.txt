@@ -1,0 +1,5 @@
+diffusers==0.14.0
+numpy==1.23.3
+spacy==3.5.2
+tqdm==4.65.0
+transformers @ git+https://github.com/huggingface/transformers.git@dbc12269ed5546b2da9236b9f1078b95b6a4d3d5
