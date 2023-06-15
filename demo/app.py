@@ -7,7 +7,6 @@ import subprocess
 
 def install_spacy_model(model_name):
     try:
-        subprocess.check_call(["python", "-m", "pip", "install", "spacy"])
         subprocess.check_call(["python", "-m", "spacy", "download", model_name])
     except subprocess.CalledProcessError as e:
         print(f"Error occurred while installing the model: {model_name}")
