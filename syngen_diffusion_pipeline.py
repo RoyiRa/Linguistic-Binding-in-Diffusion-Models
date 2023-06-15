@@ -165,7 +165,7 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
                 A kwargs dictionary that if specified is passed along to the `AttnProcessor` as defined under
                 `self.processor` in
                 [diffusers.cross_attention](https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/cross_attention.py).
-            syngen_step_size (`int`, *optional*, default to 20):
+            syngen_step_size (`float`, *optional*, default to 20.0):
                 Controls the step size of each SynGen update.
 
         Examples:
