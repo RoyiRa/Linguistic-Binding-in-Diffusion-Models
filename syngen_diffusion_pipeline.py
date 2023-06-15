@@ -104,7 +104,7 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
             callback: Optional[Callable[[int, int, torch.FloatTensor], None]] = None,
             callback_steps: int = 1,
             cross_attention_kwargs: Optional[Dict[str, Any]] = None,
-            syngen_step_size: int = 20,
+            syngen_step_size: float = 20.0,
     ):
         r"""
         Function invoked when calling the pipeline for generation.
