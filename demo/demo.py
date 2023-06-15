@@ -3,6 +3,18 @@ import torch
 
 from syngen_diffusion_pipeline import SynGenDiffusionPipeline
 
+import subprocess
+
+def install_spacy_model(model_name):
+    try:
+        subprocess.check_call(["python", "-m", "pip", "install", "spacy"])
+        subprocess.check_call(["python", "-m", "spacy", "download", model_name])
+    except subprocess.CalledProcessError as e:
+        print(f"Error occurred while installing the model: {model_name}")
+        print(f"Error details: {str(e)}")
+
+install_spacy_model("en_core_web_trf")
+
 model_path = 'CompVis/stable-diffusion-v1-4'
 device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
 pipe = SynGenDiffusionPipeline.from_pretrained(model_path).to(device)
