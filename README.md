@@ -19,7 +19,7 @@ python -m spacy download en_core_web_trf
 
 ## Inference
 ```
-python run.py --prompt "a checkered bowl on a red and blue table" --seed 1924
+python run.py --prompt "a horned lion and a spotted monkey" --seed 1269
 ```
 
 Note that this will download the stable diffusion model `CompVis/stable-diffusion-v1-4`. If you rather use an existing copy of the model, provide the absolute path using `--model_path`.
