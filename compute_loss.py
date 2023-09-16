@@ -142,8 +142,8 @@ def align_wordpieces_indices(
     return wp_indices
 
 
-def extract_attribution_indices(prompt, parser):
-    doc = parser(prompt)
+def extract_attribution_indices(doc):
+    # doc = parser(prompt)
     subtrees = []
     modifiers = ["amod", "nmod", "compound", "npadvmod", "advmod", "acomp"]
 
@@ -167,6 +167,74 @@ def extract_attribution_indices(prompt, parser):
             subtrees.append(subtree)
     return subtrees
 
+def extract_attribution_indices_with_verbs(doc):
+    '''This function specifically addresses cases where a verb is between
+       a noun and its modifier. For instance: "a dog that is red"
+       here, the aux is between 'dog' and 'red'. '''
+
+    subtrees = []
+    modifiers = ["amod", "nmod", "compound", "npadvmod", "advmod", "acomp",
+                 'relcl']
+    for w in doc:
+        if w.pos_ not in ["NOUN", "PROPN"] or w.dep_ in modifiers:
+            continue
+        subtree = []
+        stack = []
+        for child in w.children:
+            if child.dep_ in modifiers:
+                if child.pos_ not in ['AUX', 'VERB']:
+                    subtree.append(child)
+                stack.extend(child.children)
+
+        while stack:
+            node = stack.pop()
+            if node.dep_ in modifiers or node.dep_ == "conj":
+                # we don't want to add 'is' or other verbs to the loss, we want their children
+                if node.pos_ not in ['AUX', 'VERB']:
+                    subtree.append(node)
+                stack.extend(node.children)
+        if subtree:
+            subtree.append(w)
+            subtrees.append(subtree)
+        return subtrees
+
+def extract_attribution_indices_with_verb_root(doc):
+    '''This function specifically addresses cases where a verb is between
+       a noun and its modifier. For instance: "a dog that is red"
+       here, the aux is between 'dog' and 'red'. '''
+
+    subtrees = []
+    modifiers = ["amod", "nmod", "compound", "npadvmod", "advmod", "acomp"]
+    for w in doc:
+        subtree = []
+        stack = []
+
+        # if w is a verb/aux and has a noun child and a modifier child, add them to the stack
+        if w.pos_ != 'AUX' or w.dep_ in modifiers:
+            continue
+
+        for child in w.children:
+            if child.dep_ in modifiers or child.pos_ in ['NOUN', 'PROPN']:
+                if child.pos_ not in ['AUX', 'VERB']:
+                    subtree.append(child)
+                stack.extend(child.children)
+        # did not find a pair of noun and modifier
+        if len(subtree) < 2:
+            continue
+
+        while stack:
+            node = stack.pop()
+            if node.dep_ in modifiers or node.dep_ == "conj":
+                # we don't want to add 'is' or other verbs to the loss, we want their children
+                if node.pos_ not in ['AUX']:
+                    subtree.append(node)
+                stack.extend(node.children)
+
+        if subtree:
+            if w.pos_ not in ['AUX']:
+                subtree.append(w)
+            subtrees.append(subtree)
+    return subtrees
 
 def calculate_negative_loss(
         attention_maps, modifier, noun, subtree_indices, attn_map_idx_to_wp
@@ -187,7 +255,7 @@ def calculate_negative_loss(
     return negative_loss
 
 def get_indices(tokenizer, prompt: str) -> Dict[str, int]:
-    """Utility function to list the indices of the tokens you wish to alte"""
+    """Utility function to list the indices of the tokens you wish to alter"""
     ids = tokenizer(prompt).input_ids
     indices = {
         i: tok
