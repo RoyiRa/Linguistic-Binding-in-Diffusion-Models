@@ -19,8 +19,8 @@ from diffusers.utils import (
 )
 from transformers import CLIPTextModel, CLIPTokenizer, CLIPFeatureExtractor
 
-from compute_loss import get_attention_map_index_to_wordpiece, split_indices, calculate_positive_loss, calculate_negative_loss, get_indices, start_token, end_token, \
-    align_wordpieces_indices, extract_attribution_indices
+from compute_loss import get_attention_map_index_to_wordpiece, split_indices, calculate_positive_loss, calculate_negative_loss, get_indices, start_token, end_token, align_wordpieces_indices, extract_attribution_indices, extract_attribution_indices_with_verbs, extract_attribution_indices_with_verb_root
+
 
 logger = logging.get_logger(__name__)
 
@@ -40,6 +40,9 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
                          requires_safety_checker)
 
         self.parser = spacy.load("en_core_web_trf")
+        self.subtrees_indices = None
+        self.doc = None
+        # self.doc = ""#self.parser(prompt)
 
     def _aggregate_and_get_attention_maps_per_token(self):
         attention_maps = self.attention_store.aggregate_attention(
@@ -105,6 +108,7 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
             callback_steps: int = 1,
             cross_attention_kwargs: Optional[Dict[str, Any]] = None,
             syngen_step_size: float = 20.0,
+            parsed_prompt: str=None
     ):
         r"""
         Function invoked when calling the pipeline for generation.
@@ -177,6 +181,11 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
             list of `bool`s denoting whether the corresponding generated image likely represents "not-safe-for-work"
             (nsfw) content, according to the `safety_checker`.
         """
+
+        if parsed_prompt:
+          self.doc = parsed_prompt
+        else:
+          self.doc = self.parser(prompt)
         # 0. Default height and width to unet
         height = height or self.unet.config.sample_size * self.vae_scale_factor
         width = width or self.unet.config.sample_size * self.vae_scale_factor
@@ -234,7 +243,7 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
             latents,
         )
 
-        # 6. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
+        # 6. Prepare extra step kwargs.
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
 
         # NEW - stores the attention calculated in the unet
@@ -251,16 +260,17 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 # NEW
-                latents = self._syngen_step(
-                    latents,
-                    text_embeddings,
-                    t,
-                    i,
-                    syngen_step_size,
-                    cross_attention_kwargs,
-                    prompt,
-                    max_iter_to_alter=25,
-                )
+                if i < 25:
+                  latents = self._syngen_step(
+                      latents,
+                      text_embeddings,
+                      t,
+                      i,
+                      syngen_step_size,
+                      cross_attention_kwargs,
+                      prompt,
+                      max_iter_to_alter=25,
+                  )
 
                 # expand the latents if we are doing classifier free guidance
                 latent_model_input = (
@@ -325,12 +335,17 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
         if hasattr(self, "final_offload_hook") and self.final_offload_hook is not None:
             self.final_offload_hook.offload()
 
+        self.doc = None
+        self.subtrees_indices = None
+
         if not return_dict:
             return (image, has_nsfw_concept)
 
         return StableDiffusionPipelineOutput(
             images=image, nsfw_content_detected=has_nsfw_concept
         )
+
+
 
     def _syngen_step(
             self,
@@ -358,12 +373,9 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
                     cross_attention_kwargs=cross_attention_kwargs,
                 ).sample
                 self.unet.zero_grad()
-
                 # Get attention maps
                 attention_maps = self._aggregate_and_get_attention_maps_per_token()
-
                 loss = self._compute_loss(attention_maps=attention_maps, prompt=prompt)
-
                 # Perform gradient update
                 if i < max_iter_to_alter:
                     if loss != 0:
@@ -393,7 +405,9 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
             prompt: Union[str, List[str]],
             attn_map_idx_to_wp,
     ) -> torch.Tensor:
-        subtrees_indices = self._extract_attribution_indices(prompt)
+        if not self.subtrees_indices:
+          self.subtrees_indices = self._extract_attribution_indices(prompt)
+        subtrees_indices = self.subtrees_indices
         loss = 0
 
         for subtree_indices in subtrees_indices:
@@ -474,15 +488,24 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
                     collected_spacy_indices.add(collected_idx)
 
             paired_indices.append(curr_collected_wp_indices)
-            
+
         return paired_indices
+
 
     def _extract_attribution_indices(self, prompt):
-        pairs = extract_attribution_indices(prompt, self.parser)
+        # extract standard attribution indices
+        pairs = extract_attribution_indices(self.doc)
+
+        # extract attribution indices with verbs in between
+        pairs_2 = extract_attribution_indices_with_verb_root(self.doc)
+        pairs_3 = extract_attribution_indices_with_verbs(self.doc)
+        # make sure there are no duplicates
+        pairs = unify_lists(pairs, pairs_2, pairs_3)
+
+
+        print(f"Final pairs collected: {pairs}")
         paired_indices = self._align_indices(prompt, pairs)
         return paired_indices
-
-
 
 def _get_attention_maps_list(
         attention_maps: torch.Tensor
@@ -493,3 +516,30 @@ def _get_attention_maps_list(
     ]
 
     return attention_maps_list
+
+def is_sublist(sub, main):
+    # This function checks if 'sub' is a sublist of 'main'
+    return len(sub) < len(main) and all(item in main for item in sub)
+
+def unify_lists(lists_1, lists_2, lists_3):
+    unified_list = lists_1 + lists_2 + lists_3
+    sorted_list = sorted(unified_list, key=len)
+    seen = set()
+
+    result = []
+
+    for i in range(len(sorted_list)):
+        if tuple(sorted_list[i]) in seen:  # Skip if already added
+            continue
+
+        sublist_to_add = True
+        for j in range(i + 1, len(sorted_list)):
+            if is_sublist(sorted_list[i], sorted_list[j]):
+                sublist_to_add = False
+                break
+
+        if sublist_to_add:
+            result.append(sorted_list[i])
+            seen.add(tuple(sorted_list[i]))
+
+    return result
