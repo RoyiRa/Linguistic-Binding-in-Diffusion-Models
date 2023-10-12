@@ -29,6 +29,27 @@ python run.py --prompt "a horned lion and a spotted monkey" --seed 1269
 
 Note that this will download the stable diffusion model `CompVis/stable-diffusion-v1-4`. If you rather use an existing copy of the model, provide the absolute path using `--model_path`.
 
+## DVMP Prompt Generation
+```
+python dvmp.py --num_samples 500 --dest_path destination.csv
+```
+
+### Requirements for Inputs
+**num_samples**: Number of prompts to generate. Default: 200.
+
+**dest_path**: Destination CSV file path. Default: destination.csv.
+
+
+## Automatic Evaluation
+```
+python automatic_evaluation.py --captions_and_labels <path/to/csv/file> --images_dir <path/to/image/directory>
+```
+
+### Requirements for Inputs
+**captions_and_labels**: This should be a CSV file with columns named 'caption' and 'human_annotation' (optional).
+
+**images_dir**: This directory should have subdirectories, each named after a specific prompt given to the text-to-image model. Within each subdirectory, you should have the generated images from all the models being evaluated, following the naming convention **'{model_name}_{seed}.jpg'**.
+
 ## Live Demo
 
 Check out our [demo](https://huggingface.co/spaces/Royir/SynGen)
