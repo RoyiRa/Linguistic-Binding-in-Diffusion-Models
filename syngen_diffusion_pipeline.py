@@ -1,5 +1,5 @@
 import itertools
-from typing import Any, Callable, Dict, Optional, Union, List, Tuple
+from typing import Any, Callable, Dict, Optional, Union, List
 
 import spacy
 import torch
@@ -21,7 +21,7 @@ from diffusers.utils import (
 )
 from transformers import CLIPImageProcessor, CLIPTextModel, CLIPTokenizer
 
-from compute_loss import get_attention_map_index_to_wordpiece, split_indices, calculate_positive_loss, calculate_negative_loss, get_indices, start_token, end_token, align_wordpieces_indices, extract_attribution_indices, extract_attribution_indices_with_verbs, extract_attribution_indices_with_verb_root
+from compute_loss import get_attention_map_index_to_wordpiece, split_indices, calculate_positive_loss, calculate_negative_loss, get_indices, start_token, end_token, align_wordpieces_indices, extract_attribution_indices, extract_attribution_indices_with_verbs, extract_attribution_indices_with_verb_root, extract_entities_only
 
 
 logger = logging.get_logger(__name__)
@@ -37,6 +37,7 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
                  safety_checker: StableDiffusionSafetyChecker,
                  feature_extractor: CLIPImageProcessor,
                  requires_safety_checker: bool = True,
+                 include_entities: bool = False,
                  ):
         super().__init__(vae, text_encoder, tokenizer, unet, scheduler, safety_checker, feature_extractor,
                          requires_safety_checker)
@@ -44,7 +45,7 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
         self.parser = spacy.load("en_core_web_trf")
         self.subtrees_indices = None
         self.doc = None
-        # self.doc = ""#self.parser(prompt)
+        self.include_entities = include_entities
 
     def _aggregate_and_get_attention_maps_per_token(self):
         attention_maps = self.attention_store.aggregate_attention(
@@ -87,7 +88,6 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
         self.unet.set_attn_processor(attn_procs)
         self.attention_store.num_att_layers = cross_att_count
 
-    # Based on StableDiffusionPipeline.__call__ . New code is annotated with NEW.
     @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
@@ -110,9 +110,10 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
             callback_steps: int = 1,
             cross_attention_kwargs: Optional[Dict[str, Any]] = None,
             guidance_rescale: float = 0.0,
-            attn_res: Optional[Tuple[int]] = (16, 16),
+            attn_res=None,
             syngen_step_size: float = 20.0,
-            parsed_prompt: str=None
+            parsed_prompt: str = None,
+            num_intervention_steps: int = 25,
     ):
         r"""
         The call function to the pipeline for generation.
@@ -173,7 +174,9 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
                 The 2D resolution of the semantic attention map.
             syngen_step_size (`float`, *optional*, default to 20.0):
                 Controls the step size of each SynGen update.
-            parsed_prompt (`str`, *optional*, default to None):
+            num_intervention_steps ('int', *optional*, defaults to 25):
+                The number of times we apply SynGen.
+            parsed_prompt (`str`, *optional*, default to None).
 
 
         Examples:
@@ -186,11 +189,10 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
                 "not-safe-for-work" (nsfw) content.
         """
 
-        # NEW - use parsed_prompt instead of prompt
         if parsed_prompt:
-          self.doc = parsed_prompt
+            self.doc = parsed_prompt
         else:
-          self.doc = self.parser(prompt)
+            self.doc = self.parser(prompt)
         # 0. Default height and width to unet
         height = height or self.unet.config.sample_size * self.vae_scale_factor
         width = width or self.unet.config.sample_size * self.vae_scale_factor
@@ -260,13 +262,12 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
         # 6. Prepare extra step kwargs.
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
 
-        # NEW - stores the attention calculated in the unet
         if attn_res is None:
             attn_res = int(np.ceil(width / 32)), int(np.ceil(height / 32))
-        self.attention_store = AttentionStore(attn_res)
+        self.attn_res = attn_res
+        self.attention_store = AttentionStore(self.attn_res)
         self.register_attention_control()
 
-        # NEW
         text_embeddings = (
             prompt_embeds[batch_size * num_images_per_prompt:] if do_classifier_free_guidance else prompt_embeds
         )
@@ -275,18 +276,17 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
-                # NEW
-                if i < 25:
-                  latents = self._syngen_step(
-                      latents,
-                      text_embeddings,
-                      t,
-                      i,
-                      syngen_step_size,
-                      cross_attention_kwargs,
-                      prompt,
-                      max_iter_to_alter=25,
-                  )
+                if i < num_intervention_steps:
+                    latents = self._syngen_step(
+                        latents,
+                        text_embeddings,
+                        t,
+                        i,
+                        syngen_step_size,
+                        cross_attention_kwargs,
+                        prompt,
+                        num_intervention_steps=num_intervention_steps,
+                    )
 
                 # expand the latents if we are doing classifier free guidance
                 latent_model_input = (
@@ -333,7 +333,7 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
         else:
             image = latents
             has_nsfw_concept = None
-        
+
         if has_nsfw_concept is None:
             do_denormalize = [True] * image.shape[0]
         else:
@@ -344,14 +344,12 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
         # Offload all models
         self.maybe_free_model_hooks()
 
-
         if not return_dict:
             return (image, has_nsfw_concept)
 
         return StableDiffusionPipelineOutput(
             images=image, nsfw_content_detected=has_nsfw_concept
         )
-
 
     def _syngen_step(
             self,
@@ -362,7 +360,7 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
             step_size,
             cross_attention_kwargs,
             prompt,
-            max_iter_to_alter=25,
+            num_intervention_steps,
     ):
         with torch.enable_grad():
             latents = latents.clone().detach().requires_grad_(True)
@@ -384,7 +382,7 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
                 attention_maps = self._aggregate_and_get_attention_maps_per_token()
                 loss = self._compute_loss(attention_maps=attention_maps, prompt=prompt)
                 # Perform gradient update
-                if i < max_iter_to_alter:
+                if i < num_intervention_steps:
                     if loss != 0:
                         latent = self._update_latent(
                             latents=latent, loss=loss, step_size=step_size
@@ -405,7 +403,6 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
 
         return loss
 
-
     def _attribution_loss(
             self,
             attention_maps: List[torch.Tensor],
@@ -413,21 +410,32 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
             attn_map_idx_to_wp,
     ) -> torch.Tensor:
         if not self.subtrees_indices:
-          self.subtrees_indices = self._extract_attribution_indices(prompt)
+            self.subtrees_indices = self._extract_attribution_indices(prompt)
         subtrees_indices = self.subtrees_indices
+
         loss = 0
 
         for subtree_indices in subtrees_indices:
             noun, modifier = split_indices(subtree_indices)
             all_subtree_pairs = list(itertools.product(noun, modifier))
-            positive_loss, negative_loss = self._calculate_losses(
-                attention_maps,
-                all_subtree_pairs,
-                subtree_indices,
-                attn_map_idx_to_wp,
-            )
-            loss += positive_loss
-            loss += negative_loss
+            if noun and not modifier:
+                if isinstance(noun, list) and len(noun) == 1:
+                    processed_noun = noun[0]
+                else:
+                    processed_noun = noun
+                loss += calculate_negative_loss(
+                        attention_maps, modifier, processed_noun, subtree_indices, attn_map_idx_to_wp
+                    )
+            else:
+                positive_loss, negative_loss = self._calculate_losses(
+                    attention_maps,
+                    all_subtree_pairs,
+                    subtree_indices,
+                    attn_map_idx_to_wp,
+                )
+
+                loss += positive_loss
+                loss += negative_loss
 
         return loss
 
@@ -473,17 +481,18 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
                         continue
 
                     wp = wp.replace("</w>", "")
-                    if member.text == wp:
+                    if member.text.lower() == wp.lower():
                         if idx not in curr_collected_wp_indices and idx not in collected_spacy_indices:
                             curr_collected_wp_indices.append(idx)
                             break
                     # take care of wordpieces that are split up
-                    elif member.text.startswith(wp) and wp != member.text:  # can maybe be while loop
+                    elif member.text.lower().startswith(wp.lower()) and wp.lower() != member.text.lower():  # can maybe be while loop
                         wp_indices = align_wordpieces_indices(
                             wordpieces2indices, idx, member.text
                         )
                         # check if all wp_indices are not already in collected_spacy_indices
-                        if wp_indices and (wp_indices not in curr_collected_wp_indices) and all([wp_idx not in collected_spacy_indices for wp_idx in wp_indices]):
+                        if wp_indices and (wp_indices not in curr_collected_wp_indices) and all(
+                                [wp_idx not in collected_spacy_indices for wp_idx in wp_indices]):
                             curr_collected_wp_indices.append(wp_indices)
                             break
 
@@ -494,25 +503,44 @@ class SynGenDiffusionPipeline(StableDiffusionPipeline):
                 else:
                     collected_spacy_indices.add(collected_idx)
 
-            paired_indices.append(curr_collected_wp_indices)
+            if curr_collected_wp_indices:
+                paired_indices.append(curr_collected_wp_indices)
+            else:
+                print(f"No wordpieces were aligned for {pair} in _align_indices")
 
         return paired_indices
-
 
     def _extract_attribution_indices(self, prompt):
+        modifier_indices = []
         # extract standard attribution indices
-        pairs = extract_attribution_indices(self.doc)
+        modifier_sets_1 = extract_attribution_indices(self.doc)
+        modifier_indices_1 = self._align_indices(prompt, modifier_sets_1)
+        if modifier_indices_1:
+            modifier_indices.append(modifier_indices_1)
 
         # extract attribution indices with verbs in between
-        pairs_2 = extract_attribution_indices_with_verb_root(self.doc)
-        pairs_3 = extract_attribution_indices_with_verbs(self.doc)
+        modifier_sets_2 = extract_attribution_indices_with_verb_root(self.doc)
+        modifier_indices_2 = self._align_indices(prompt, modifier_sets_2)
+        if modifier_indices_2:
+            modifier_indices.append(modifier_indices_2)
+
+        modifier_sets_3 = extract_attribution_indices_with_verbs(self.doc)
+        modifier_indices_3 = self._align_indices(prompt, modifier_sets_3)
+        if modifier_indices_3:
+            modifier_indices.append(modifier_indices_3)
+
+        # entities only
+        if self.include_entities:
+            modifier_sets_4 = extract_entities_only(self.doc)
+            modifier_indices_4 = self._align_indices(prompt, modifier_sets_4)
+            modifier_indices.append(modifier_indices_4)
+
         # make sure there are no duplicates
-        pairs = unify_lists(pairs, pairs_2, pairs_3)
+        modifier_indices = unify_lists(modifier_indices)
+        print(f"Final modifier indices collected:{modifier_indices}")
 
+        return modifier_indices
 
-        print(f"Final pairs collected: {pairs}")
-        paired_indices = self._align_indices(prompt, pairs)
-        return paired_indices
 
 def _get_attention_maps_list(
         attention_maps: torch.Tensor
@@ -524,29 +552,40 @@ def _get_attention_maps_list(
 
     return attention_maps_list
 
-def is_sublist(sub, main):
-    # This function checks if 'sub' is a sublist of 'main'
-    return len(sub) < len(main) and all(item in main for item in sub)
 
-def unify_lists(lists_1, lists_2, lists_3):
-    unified_list = lists_1 + lists_2 + lists_3
-    sorted_list = sorted(unified_list, key=len)
-    seen = set()
+def unify_lists(list_of_lists):
+    def flatten(lst):
+        for elem in lst:
+            if isinstance(elem, list):
+                yield from flatten(elem)
+            else:
+                yield elem
 
-    result = []
+    def have_common_element(lst1, lst2):
+        flat_list1 = set(flatten(lst1))
+        flat_list2 = set(flatten(lst2))
+        return not flat_list1.isdisjoint(flat_list2)
 
-    for i in range(len(sorted_list)):
-        if tuple(sorted_list[i]) in seen:  # Skip if already added
-            continue
+    lst = []
+    for l in list_of_lists:
+        lst += l
+    changed = True
+    while changed:
+        changed = False
+        merged_list = []
+        while lst:
+            first = lst.pop(0)
+            was_merged = False
+            for index, other in enumerate(lst):
+                if have_common_element(first, other):
+                    # If we merge, we should flatten the other list but not first
+                    new_merged = first + [item for item in other if item not in first]
+                    lst[index] = new_merged
+                    changed = True
+                    was_merged = True
+                    break
+            if not was_merged:
+                merged_list.append(first)
+        lst = merged_list
 
-        sublist_to_add = True
-        for j in range(i + 1, len(sorted_list)):
-            if is_sublist(sorted_list[i], sorted_list[j]):
-                sublist_to_add = False
-                break
-
-        if sublist_to_add:
-            result.append(sorted_list[i])
-            seen.add(tuple(sorted_list[i]))
-
-    return result
+    return lst

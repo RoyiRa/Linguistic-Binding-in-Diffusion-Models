@@ -126,11 +126,11 @@ def align_wordpieces_indices(
 
     # Run over the next wordpieces in the sequence (which is why we use +1)
     for wp_idx in range(start_idx + 1, len(wordpieces2indices)):
-        if wp == target_word:
+        if wp.lower() == target_word.lower():
             break
 
         wp2 = wordpieces2indices[wp_idx].replace("</w>", "")
-        if target_word.startswith(wp + wp2) and wp2 != target_word:
+        if target_word.lower().startswith(wp.lower() + wp2.lower()) and wp2.lower() != target_word.lower():
             wp += wordpieces2indices[wp_idx].replace("</w>", "")
             wp_indices.append(wp_idx)
         else:
@@ -205,6 +205,7 @@ def extract_attribution_indices_with_verb_root(doc):
 
     subtrees = []
     modifiers = ["amod", "nmod", "compound", "npadvmod", "advmod", "acomp"]
+
     for w in doc:
         subtree = []
         stack = []
@@ -236,23 +237,43 @@ def extract_attribution_indices_with_verb_root(doc):
             subtrees.append(subtree)
     return subtrees
 
+
+def extract_entities_only(doc):
+    entities = []
+    for w in doc:
+        if w.pos_ in ['NOUN', 'PROPN']:
+            entities.append([w])
+    return entities
+
+
 def calculate_negative_loss(
         attention_maps, modifier, noun, subtree_indices, attn_map_idx_to_wp
 ):
     outside_indices = _get_outside_indices(subtree_indices, attn_map_idx_to_wp)
-    negative_modifier_loss, num_modifier_pairs = _calculate_outside_loss(
-        attention_maps, modifier, outside_indices
-    )
+
     negative_noun_loss, num_noun_pairs = _calculate_outside_loss(
         attention_maps, noun, outside_indices
     )
+    if outside_indices:
+      negative_noun_loss = -sum(negative_noun_loss) / len(outside_indices)
+    else:
+      negative_noun_loss = 0
 
-    negative_modifier_loss = -sum(negative_modifier_loss) / len(outside_indices)
-    negative_noun_loss = -sum(negative_noun_loss) / len(outside_indices)
+    if modifier:
+        negative_modifier_loss, num_modifier_pairs = _calculate_outside_loss(
+            attention_maps, modifier, outside_indices
+        )
+        if outside_indices:
+          negative_modifier_loss = -sum(negative_modifier_loss) / len(outside_indices)
+        else:
+          negative_modifier_loss = 0
 
-    negative_loss = (negative_modifier_loss + negative_noun_loss) / 2
+        negative_loss = (negative_modifier_loss + negative_noun_loss) / 2
+    else:
+        negative_loss = negative_noun_loss
 
     return negative_loss
+
 
 def get_indices(tokenizer, prompt: str) -> Dict[str, int]:
     """Utility function to list the indices of the tokens you wish to alter"""
