@@ -6,10 +6,10 @@ dependencies:
   - python=3.11.2
   - pip=23.0.1
   - pip:
-    - diffusers==0.14.0
-    - numpy==1.23.3
-    - spacy==3.5.2
+    - diffusers==0.21.1
+    - numpy==1.23.5
+    - spacy==3.6.1
     - tqdm==4.65.0
-    - transformers @ git+https://github.com/huggingface/transformers.git@dbc12269ed5546b2da9236b9f1078b95b6a4d3d5
-    - torch==2.0.0
-    - accelerate==0.18.0
+    - transformers==4.30.2
+    - torch==2.0.1
+    - accelerate==0.23.0
