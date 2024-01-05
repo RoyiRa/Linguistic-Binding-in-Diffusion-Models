@@ -1,4 +1,4 @@
-# Linguistic Binding in Diffusion Models: Enhancing Attribute Correspondence through Attention Map Alignment
+# Linguistic Binding in Diffusion Models: Enhancing Attribute Correspondence through Attention Map Alignment (NeurIPS 2023, oral)
 
 This repository hosts the code and resources associated with our [paper](https://arxiv.org/abs/2306.08877) on linguistic binding in diffusion models.
 
