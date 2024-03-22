@@ -59,13 +59,10 @@ python automatic_evaluation.py --captions_and_labels <path/to/csv/file> --images
 If you use this code or our results in your research, please cite as:
 
 ```bibtex
-@misc{rassin2023linguistic,
-      title={Linguistic Binding in Diffusion Models: Enhancing Attribute Correspondence through Attention Map Alignment}, 
-      author={Royi Rassin and Eran Hirsch and Daniel Glickman and Shauli Ravfogel and Yoav Goldberg and Gal Chechik},
-      year={2023},
-      eprint={2306.08877},
-      archivePrefix={arXiv},
-      primaryClass={cs.CL}
+@article{rassin2024linguistic,
+  title={Linguistic binding in diffusion models: Enhancing attribute correspondence through attention map alignment},
+  author={Rassin, Royi and Hirsch, Eran and Glickman, Daniel and Ravfogel, Shauli and Goldberg, Yoav and Chechik, Gal},
+  journal={Advances in Neural Information Processing Systems},
+  volume={36},
+  year={2024}
 }
-
-
